@@ -1,7 +1,7 @@
-Sensor Data Aggregation and Visualization
+Sensor Data Aggregation and Visualization: 
 A GUI-based project for real-time sensor data aggregation, processing, and visualization. Featuring an intuitive interface powered by PyQT and optimized algorithms running on a Raspberry Pi Pico.
 
-Description
+Description: 
 Welcome to the world of real-time environmental monitoring — or as I like to call it, "watching sensors do their thing in style!" This project features a graphical user interface (GUI) built with PyQT, which interfaces with sensors through a custom communication protocol. It aggregates environmental data like temperature, humidity, and air quality in real time — and looks good doing it! 🌡️💨
 
 Not only does it provide a smooth user experience, but it also boosts data processing efficiency by 30%! 🎉 The Raspberry Pi Pico with MicroPython does all the heavy lifting, and the GUI is there to show off the results with minimal latency.
