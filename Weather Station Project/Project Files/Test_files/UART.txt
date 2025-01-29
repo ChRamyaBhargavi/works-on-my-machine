@@ -1,0 +1,11 @@
+import machine
+import utime
+
+uart = machine.UART(0, baudrate=115200)
+
+while True:
+    print("UART started")
+    uart.write("UART is working!")
+    utime.sleep(10)
+    
+

@@ -1,0 +1,263 @@
+import struct
+import sys
+
+import serial
+from PyQt5.QtCore import Qt, QDateTime
+from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QFrame, QMessageBox
+from PyQt5.QtChart import QChart, QChartView, QLineSeries, QDateTimeAxis, QValueAxis
+from PyQt5.QtGui import QPainter
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+
+class MyApp(QWidget):
+    def __init__(self):
+        super().__init__()
+
+        # serial port values
+        self.port_name = 'COM5'
+        self.baud_rate = 115000
+
+        # Devices  and mappings
+        self.devices = ['i2c sensor', 'BLE sensor']
+        self.device_mappings = {'i2c sensor': 0x01, 'BLE sensor': 0x02}
+        self.device_type_mappings = {'i2c sensor': 0x01, 'BLE sensor': 0x02}
+        self.operation_mapping = {'read': 0x01, 'write': 0x02, 'registry': 0x03}
+        self.service_mappings = {'HTP guages': 0x01, 'Humidity Aggregation': 0x02, 'Pressure Aggregation': 0x03,
+                                 'Temperature Aggregation': 0x04, 'Time Series': 0x05}
+        # Devices
+        self.devices = ['i2c sensor', 'BLE sensor']
+
+        # Initialize placeholder services for each device
+        self.device_services = {
+            'i2c sensor': ['Humidity Aggregation', 'Pressure Aggregation', 'Temperature Aggregation', 'Time Series'],
+            'BLE sensor': ['Humidity Aggregation', 'Pressure Aggregation', 'Temperature Aggregation', 'Time Series']
+        }
+
+        self.init_ui()
+
+    def init_ui(self):
+        self.setStyleSheet("background-color: black; color: white;")
+
+        layout = QVBoxLayout(self)
+
+        # Device buttons
+        self.devices_layout = QHBoxLayout()
+        self.devices_layout.setAlignment(Qt.AlignTop)
+
+        for device_name in self.devices:
+            device_button = QPushButton(device_name, self)
+            device_button.setStyleSheet("background-color: lightgrey; color: black;")
+            device_button.clicked.connect(lambda _, device=device_name: self.show_services(device))
+            self.devices_layout.addWidget(device_button)
+
+        layout.addLayout(self.devices_layout)
+
+        # Service layout
+        self.services_layout = QHBoxLayout()
+        self.services_layout.setAlignment(Qt.AlignTop)
+
+        layout.addLayout(self.services_layout)
+
+        # Service frame
+        self.services_frame = QFrame()
+        self.services_frame.setStyleSheet("background-color: black; color: white; border: 2px solid lightgrey;")
+        self.services_frame_layout = QVBoxLayout(self.services_frame)
+
+        layout.addWidget(self.services_frame, stretch=1)
+
+        self.setLayout(layout)
+        self.setGeometry(100, 100, 800, 600)
+        self.setWindowTitle('Pico Data Reader')
+
+        self.show()
+
+    def show_services(self, selected_device):
+        # Clear existing service buttons
+        for i in reversed(range(self.services_layout.count())):
+            self.services_layout.itemAt(i).widget().setParent(None)
+
+        # Get services for the selected device from the dictionary
+        services_for_device = self.device_services.get(selected_device, [])
+
+        for service_name in services_for_device:
+            service_button = QPushButton(service_name, self)
+            service_button.setStyleSheet("background-color: lightgrey; color: black;")
+            service_button.clicked.connect(lambda _, service=service_name: self.show_service_data(selected_device, service))
+            self.services_layout.addWidget(service_button)
+
+        # Show default service for the selected device
+        self.show_default_service(selected_device)
+
+    def show_default_service(self, selected_device):
+        if self.services_layout.count() > 0:
+            # Only show the default service if there are services
+            default_service = self.services_layout.itemAt(0).widget().text()
+            self.show_service_data(selected_device, default_service)
+
+    def show_service_data(self, device, service):
+        serial_port = serial.Serial(self.port_name, self.baud_rate)
+
+        if service == 'Time Series':
+            try:
+                print("entered timeserirs")
+                self.send_request(serial_port, device, service, "read", None)
+                htp_arr = self.recieve_response(serial_port)
+               #print("30 value arr:", htp_arr)
+                self.show_time_series_chart(htp_arr)
+            except Exception as e:
+                self.show_error_message(str(e))
+            finally:
+                serial_port.close()
+        elif service in ['Humidity Aggregation', 'Pressure Aggregation', 'Temperature Aggregation']:
+            self.show_bar_graph(service)
+        else:
+            # Visualizations for other services can be added here
+            print(f"Selected Device: {device}, Selected Service: {service}")
+
+    def show_time_series_chart(self,htp_arr):
+        chart = QChart()
+        chart.setTitle('Time Series Chart')
+        """"
+        # Dummy data for demonstration
+        if device=='i2c sensor':
+            data = {
+                'Humidity': [(0, 41), (10000, 41.2), (20000, 41.2),(30000,41.4),(40000,42),(50000,41.8)],
+                'Temperature': [(0, 22), (10000, 22.1), (20000, 23.6),(30000, 25.5),(40000, 24.6),(50000,23)],
+                'Pressure': [(0, 976), (10000, 977), (20000, 981),(30000, 983),(40000, 979),(50000,977)],
+            }
+        else :
+            data = {
+                'Humidity': [(0, 41), (10000, 41.2), (20000, 41.4), (30000, 41.2), (40000, 41.0),(50000,41)],
+                'Temperature': [(0, 22), (10000, 22.1), (20000, 22.4), (30000, 22.3), (40000, 22.5),(50000,22.3)],
+                'Pressure': [(0, 976), (10000, 977), (20000, 976), (30000, 976), (40000, 977),(50000,977)],
+            }
+            """
+        #result_list = [(i * 10000, temp[1]) for i, temp in enumerate(temperature_data)]
+        print ("entered hcarts value setting")
+        hum_arr = htp_arr[:10]
+        temp_arr = htp_arr[10:20]
+        press_arr = htp_arr[20:30]
+        data = {'Humidity': [(i * 10000, hum) for i, hum in enumerate(hum_arr)],
+                'Temperature': [(i * 10000, temp) for i, temp in enumerate(temp_arr)],
+                'Pressure': [(i * 10000, press) for i, press in enumerate(press_arr)]}
+
+
+
+        for variable, values in data.items():
+            series = QLineSeries()
+            series.setName(variable)
+
+            for timestamp, value in values:
+                series.append(timestamp, value)
+
+            chart.addSeries(series)
+
+            axis_y = QValueAxis()
+            axis_y.setTitleText(variable)
+            chart.addAxis(axis_y, Qt.AlignLeft)
+            series.attachAxis(axis_y)
+
+        axis_x = QDateTimeAxis()
+        axis_x.setFormat('mm:ss')
+        axis_x.setTickCount(5)  # Adjust the number of ticks as needed
+        chart.addAxis(axis_x, Qt.AlignBottom)
+
+        chart_view = QChartView(chart)
+        chart_view.setRenderHint(QPainter.Antialiasing)
+
+        # Clear existing content in the service frame layout
+        for i in reversed(range(self.services_frame_layout.count())):
+            self.services_frame_layout.itemAt(i).widget().setParent(None)
+
+        # Add the chart view to the service frame
+        self.services_frame_layout.addWidget(chart_view)
+
+    def show_bar_graph(self, aggregation_type):
+        # Dummy data for demonstration
+        categories = ['Avg', 'Max', 'Min']
+
+        # Replace with actual data
+        if aggregation_type == 'Humidity Aggregation':
+            values = [25, 35, 15]  # Replace with actual data
+            unit = '%'
+        elif aggregation_type == 'Pressure Aggregation':
+            values = [1000, 1100, 900]  # Replace with actual data
+            unit = 'hPa'
+        elif aggregation_type == 'Temperature Aggregation':
+            values = [22, 25, 20]  # Replace with actual data
+            unit = '°C'
+        else:
+            values = []
+            unit = ''
+
+        # Create bar graph using Matplotlib
+        fig, ax = plt.subplots()
+        ax.bar(categories, values, color=['blue', 'green', 'red'])
+        ax.set_ylabel(f'{aggregation_type} ({unit})')
+        ax.set_title(f'{aggregation_type} Bar Graph')
+
+        # Display Matplotlib plot in a PyQt window
+        mpl_canvas = FigureCanvas(fig)
+        mpl_canvas.setGeometry(0, 0, 400, 300)  # Adjust the size as needed
+
+        # Clear existing content in the service frame layout
+        for i in reversed(range(self.services_frame_layout.count())):
+            self.services_frame_layout.itemAt(i).widget().setParent(None)
+
+        # Add the Matplotlib canvas to the service frame
+        self.services_frame_layout.addWidget(mpl_canvas)
+
+    def send_request(self,serial_port,device,command,operation,params_arr):
+        protocol_id=0x01
+        channel_id=0x01
+        device_id=self.device_mappings[device]
+        device_type_id=self.device_type_mappings[device]
+        operation_id=self.operation_mapping[operation]
+        command_id=self.service_mappings[command]
+          # or some other value
+        if params_arr is None :
+            nparams = 0x0
+        else :
+            nparams=len[params_arr]
+
+        #params_arr = 0 if params_arr is None else len(params_arr)
+        header_bytes=bytes([protocol_id,channel_id,device_id,device_type_id,operation_id])
+        #req_payload=bytes([nparams])
+        command=header_bytes+struct.pack("<h",command_id)+bytes([nparams])
+        serial_port.write(command+b'\n')
+
+    def recieve_response(self,serial_port):
+        response_command=serial_port.readline()[:-1]
+        protocol_id=response_command[0]
+        channel_id=response_command[1]
+        device_id= response_command[2]
+        device_type_id= response_command[3]
+        operation_id = response_command[4]
+        command = struct.unpack("<h", response_command[5:7])
+        nresults= response_command[7]
+        unit_id=response_command[8] #datatype
+        #0x02 for array type, set the the unit id accordingly in central pico
+        if(unit_id==0x02):
+            result=[]
+            print("entered response loop")
+            num=0
+            print(response_command )
+
+            print("nresults",nresults)
+            result=struct.unpack("<30H",response_command[9:9+2*nresults])
+            print("result_arr:",result)
+        else :
+            result= struct.unpack("<h",response_command[9:11])[0]
+        return result
+
+    def show_error_message(self, message):
+        msg_box = QMessageBox()
+        msg_box.setIcon(QMessageBox.Critical)
+        msg_box.setText("Error")
+        msg_box.setInformativeText(message)
+        msg_box.exec_()
+
+if __name__ == '__main__':
+    app = QApplication(sys.argv)
+    ex = MyApp()
+    sys.exit(app.exec_())

@@ -1,0 +1,164 @@
+import ujson
+import machine
+from machine import Pin, I2C
+import utime
+from bme680 import *
+import struct
+import aioble
+import bluetooth
+import uasyncio as asyncio
+
+# I2C Configuration for BME280
+i2c = I2C(0, scl=Pin(1), sda=Pin(0))
+bme_sensor = BME680_I2C(i2c=i2c)
+result_temp = 0
+response_payload = bytes([0])
+
+# Replace 'tx' and 'rx' with the actual TX and RX pins connected to your USB to UART adapter
+uart = machine.UART(1, baudrate=115000, tx=4, rx=5)
+
+# org.bluetooth.service.environmental_sensing
+_ENV_SENSE_UUID = bluetooth.UUID(0x181A)
+# org.bluetooth.characteristic.temperature
+_ENV_SENSE_TEMP_UUID = bluetooth.UUID(0x2A6E)
+
+# Parameters for collecting and updating sensor data
+SENSOR_UPDATE_INTERVAL = 5  # seconds
+ARRAY_SIZE = 20
+sensor_data = {'temperature': [], 'pressure': []}
+
+# Global variable to share the average value
+avg_value = 0
+
+# Helper to decode the temperature characteristic encoding (sint16, hundredths of a degree).
+def _decode_temperature_ble(data):
+    return struct.unpack("<h", data)[0] / 100
+
+async def find_temp_sensor():
+    # Scan for 5 seconds, in active mode, with a very low interval/window (to
+    # maximize detection rate).
+    async with aioble.scan(5000, interval_us=30000, window_us=30000, active=True) as scanner:
+        async for result in scanner:
+            # See if it matches our name and the environmental sensing service.
+            if result.name() == "mpy-temp" and _ENV_SENSE_UUID in result.services():
+                return result.device
+    return None
+
+async def collect_sensor_data():
+    global sensor_data
+    global avg_value
+    while True:
+        # Collect BME temperature and pressure values
+        temperature = bme_sensor.temperature
+        pressure = bme_sensor.pressure
+        print(pressure)
+
+        # Update sensor data dictionary
+        sensor_data['temperature'].append(float(temperature))
+        sensor_data['pressure'].append(float(pressure))
+
+        # Maintain array size (keep the last ARRAY_SIZE values)
+        for key in sensor_data.keys():
+            sensor_data[key] = sensor_data[key][-ARRAY_SIZE:]
+
+        # Update statistics (average, max, min)
+        for key in sensor_data.keys():
+            avg_value = sum(sensor_data[key]) / len(sensor_data[key])
+            max_value = max(sensor_data[key])
+            min_value = min(sensor_data[key])
+
+            print(f'{key}: Avg={avg_value:.2f}, Max={max_value:.2f}, Min={min_value:.2f}')
+
+        await asyncio.sleep(SENSOR_UPDATE_INTERVAL)
+
+async def process_request(request_command):
+    protocol_id = request_command[0]
+    channel_id = request_command[1]
+    device_id = request_command[2]
+    device_type_id = request_command[3]
+    operation_id = request_command[4]
+    command_id = struct.unpack("<h", request_command[5:7])[0]
+    nparams = request_command[7]
+    global response_payload
+    if protocol_id == 0x01 and channel_id == 0x01 and device_type_id == 0x01 and operation_id == 0x01 and command_id == 0x01:
+        #response_payload =
+        await sensor_operation(device_id, device_type_id, operation_id, command_id, None)
+
+        headers = bytes([protocol_id, channel_id, device_id, device_type_id, operation_id]) + request_command[5:7]
+
+        result = headers + response_payload
+        print(f"{protocol_id},{channel_id},{device_id},{device_type_id},{operation_id},{command_id},{nparams}")
+        return result
+
+async def sensor_operation(device_id, device_type_id, operation_id, command_id, param_arr):
+    global avg_value
+    if device_id == 0x01 and command_id == 0x01:
+        result = int(float(bme_sensor.temperature))
+    elif device_id == 0x01 and command_id == 0x02:
+        print(avg_value)
+        result = int(avg_value)
+    elif device_id == 0x02:
+        asyncio.run(connect_ble())
+        asyncio.sleep(300)
+        result = result_temp
+    print("result:", result)
+    global response_payload
+    nresults = 0x01
+    unit_id = 0x01
+    res_encoded = struct.pack("<h", result)
+    error_id = 0x00
+    response_payload = bytes([nresults, unit_id]) + res_encoded + bytes([error_id])
+    print("104", response_payload)
+    #return response_payload
+
+def read_until(uart, delimiter=b'\n', max_bytes=256):
+    buffer = bytearray(max_bytes)
+    index = 0
+
+    while True:
+        byte = uart.read(1)
+        if byte == delimiter:
+            break
+        if byte:
+            buffer[index] = byte[0]
+            index += 1
+
+    return bytes(buffer[:index])
+
+async def connect_ble():
+    device = await find_temp_sensor()
+    connection = await device.connect()
+    async with connection:
+        try:
+            temp_service = await connection.service(_ENV_SENSE_UUID)
+            temp_characteristic = await temp_service.characteristic(_ENV_SENSE_TEMP_UUID)
+            print("service and char found")
+        except asyncio.TimeoutError:
+            print("Timeout discovering services/characteristics")
+            return
+        global result_temp
+        result_temp = int(_decode_temperature_ble(await temp_characteristic.read()))
+        print(result_temp)
+
+async def main():
+    # Start the background task for collecting sensor data
+    asyncio.create_task(collect_sensor_data())
+
+    while True:
+        start_time = utime.ticks_ms()
+
+        while utime.ticks_diff(utime.ticks_ms(), start_time) < 1000:
+            if uart.any():
+                request_command = read_until(uart)
+                response_command = await process_request(request_command)
+                print(response_command)
+                uart.write(response_command + b'\n')
+                break  # Exit the inner loop if UART data is received
+
+            await asyncio.sleep_ms(50)  # Adjust the sleep duration as needed
+
+        await asyncio.sleep(5)
+
+# Run the event loop
+asyncio.run(main())
+
